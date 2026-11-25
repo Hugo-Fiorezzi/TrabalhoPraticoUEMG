@@ -13,40 +13,95 @@ import javax.swing.JOptionPane;
 public class VendaDAO {
 
     public boolean inserir(Venda v){
+        if(v == null || v.getCliente() == null || v.getCliente().getId() == null || v.getCliente().getId() <= 0){
+            JOptionPane.showMessageDialog(null, "Selecione um cliente válido.");
+            return false;
+        }
+        if(v.getItens() == null || v.getItens().isEmpty()){
+            JOptionPane.showMessageDialog(null, "A venda deve possuir pelo menos um produto.");
+            return false;
+        }
+        for(ItemVenda item : v.getItens()){
+            if(item == null || item.getProduto() == null || item.getProduto().getId() == null || item.getProduto().getId() <= 0){
+                JOptionPane.showMessageDialog(null, "Produto inválido na venda.");
+                return false;
+            }
+            if(item.getQuantidade() <= 0){
+                JOptionPane.showMessageDialog(null, "A quantidade deve ser maior que zero.");
+                return false;
+            }
+            if(item.getValorUnitario() <= 0){
+                JOptionPane.showMessageDialog(null, "O valor unitário deve ser maior que zero.");
+                return false;
+            }
+        }
         String sql = "INSERT INTO venda(data_venda, cliente_id) " +
                      "VALUES(?,?)";
         boolean resposta = false;
+        Connection con = Conexao.getConexao();
+        if(con == null){
+            return false;
+        }
         try{
-            Connection con = Conexao.getConexao();
+            con.setAutoCommit(false);
             PreparedStatement ps = con.prepareStatement(sql,
                     Statement.RETURN_GENERATED_KEYS);
             LocalDateTime data = v.getDataVenda() != null ? v.getDataVenda() : LocalDateTime.now();
+            v.setDataVenda(data);
             ps.setTimestamp(1, Timestamp.valueOf(data));
             ps.setInt(2, v.getCliente().getId());
             ps.executeUpdate();
             ResultSet result = ps.getGeneratedKeys();
             result.next();
             v.setId(result.getInt(1));
-            if(v.getItens() != null){
-                sql = "INSERT INTO item_venda(venda_id, produto_id, quantidade, valor_unitario) " +
-                      "VALUES(?,?,?,?)";
-                for(ItemVenda item : v.getItens()){
-                    ps = con.prepareStatement(sql, Statement.RETURN_GENERATED_KEYS);
-                    ps.setInt(1, v.getId());
-                    ps.setInt(2, item.getProduto().getId());
-                    ps.setInt(3, item.getQuantidade());
-                    ps.setDouble(4, item.getValorUnitario());
-                    ps.executeUpdate();
-                    ResultSet rsItem = ps.getGeneratedKeys();
-                    rsItem.next();
-                    item.setId(rsItem.getInt(1));
+            String sqlEstoque = "UPDATE produto SET estoque = estoque - ? WHERE id = ? AND estoque >= ?";
+            String sqlItem = "INSERT INTO item_venda(venda_id, produto_id, quantidade, valor_unitario) " +
+                             "VALUES(?,?,?,?)";
+            for(ItemVenda item : v.getItens()){
+                PreparedStatement psEstoque = con.prepareStatement(sqlEstoque);
+                psEstoque.setInt(1, item.getQuantidade());
+                psEstoque.setInt(2, item.getProduto().getId());
+                psEstoque.setInt(3, item.getQuantidade());
+                int atualizados = psEstoque.executeUpdate();
+                if(atualizados == 0){
+                    con.rollback();
+                    v.setId(0);
+                    for(ItemVenda it : v.getItens()){
+                        it.setId(0);
+                    }
+                    JOptionPane.showMessageDialog(null,
+                            "Estoque insuficiente para o produto: " + item.getProduto().getNome());
+                    return false;
                 }
+                PreparedStatement psItem = con.prepareStatement(sqlItem, Statement.RETURN_GENERATED_KEYS);
+                psItem.setInt(1, v.getId());
+                psItem.setInt(2, item.getProduto().getId());
+                psItem.setInt(3, item.getQuantidade());
+                psItem.setDouble(4, item.getValorUnitario());
+                psItem.executeUpdate();
+                ResultSet rsItem = psItem.getGeneratedKeys();
+                rsItem.next();
+                item.setId(rsItem.getInt(1));
             }
+            con.commit();
             resposta = true;
         }catch(Exception ex){
+            try{
+                con.rollback();
+            }catch(Exception e){
+            }
+            v.setId(0);
+            for(ItemVenda it : v.getItens()){
+                it.setId(0);
+            }
             JOptionPane.showMessageDialog(null,
                     "Erro ao inserir: " + ex.getMessage());
             resposta = false;
+        }finally{
+            try{
+                con.setAutoCommit(true);
+            }catch(Exception e){
+            }
         }
         return resposta;
     }
